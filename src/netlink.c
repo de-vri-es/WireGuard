@@ -24,7 +24,8 @@ static const struct nla_policy device_policy[WGDEVICE_A_MAX + 1] = {
 	[WGDEVICE_A_FLAGS]		= { .type = NLA_U32 },
 	[WGDEVICE_A_LISTEN_PORT]	= { .type = NLA_U16 },
 	[WGDEVICE_A_FWMARK]		= { .type = NLA_U32 },
-	[WGDEVICE_A_PEERS]		= { .type = NLA_NESTED }
+	[WGDEVICE_A_PEERS]		= { .type = NLA_NESTED },
+	[WGDEVICE_A_TUNNEL_NETNS_FD]	= { .type = NLA_U32 }
 };
 
 static const struct nla_policy peer_policy[WGPEER_A_MAX + 1] = {
@@ -472,6 +473,27 @@ out:
 	return ret;
 }
 
+static int set_tunnel_netns(struct wg_device *wg, u32 fd)
+{
+	struct net *new_net;
+
+	if (wg->sock4 != NULL || wg->sock6 != NULL)
+		return -EINVAL;
+
+	new_net = get_net_ns_by_fd(fd);
+
+	if (IS_ERR(new_net))
+		return PTR_ERR(new_net);
+
+	if (wg->have_creating_net_ref)
+		put_net(wg->creating_net);
+
+	wg->have_creating_net_ref = true;
+	wg->creating_net = new_net;
+
+	return 0;
+}
+
 static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 {
 	struct wg_device *wg = lookup_interface(info->attrs, skb);
@@ -558,6 +580,14 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 				goto out;
 		}
 	}
+
+	if (info->attrs[WGDEVICE_A_TUNNEL_NETNS_FD]) {
+		int fd = nla_get_u32(info->attrs[WGDEVICE_A_TUNNEL_NETNS_FD]);
+		ret = set_tunnel_netns(wg, fd);
+		if (ret < 0)
+			goto out;
+	}
+
 	ret = 0;
 
 out:

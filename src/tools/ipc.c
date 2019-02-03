@@ -15,6 +15,7 @@
 #include <sys/socket.h>
 #include <net/if.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -220,6 +221,8 @@ static int userspace_set_device(struct wgdevice *dev)
 		fprintf(f, "listen_port=%u\n", dev->listen_port);
 	if (dev->flags & WGDEVICE_HAS_FWMARK)
 		fprintf(f, "fwmark=%u\n", dev->fwmark);
+	if (dev->tunnel_netns)
+		fprintf(f, "tunnel_netns=%s\n", dev->tunnel_netns);
 	if (dev->flags & WGDEVICE_REPLACE_PEERS)
 		fprintf(f, "replace_peers=true\n");
 
@@ -559,10 +562,18 @@ static int kernel_set_device(struct wgdevice *dev)
 	struct nlattr *peers_nest, *peer_nest, *allowedips_nest, *allowedip_nest;
 	struct nlmsghdr *nlh;
 	struct mnlg_socket *nlg;
+	int tunnel_netns_fd = -1;
 
 	nlg = mnlg_socket_open(WG_GENL_NAME, WG_GENL_VERSION);
 	if (!nlg)
 		return -errno;
+
+	if (dev->tunnel_netns) {
+		ret = tunnel_netns_fd = open(dev->tunnel_netns, O_RDONLY | O_CLOEXEC);
+		if (ret < 0)
+			goto out;
+		ret = 0;
+	}
 
 again:
 	nlh = mnlg_msg_prepare(nlg, WG_CMD_SET_DEVICE, NLM_F_REQUEST | NLM_F_ACK);
@@ -577,6 +588,8 @@ again:
 			mnl_attr_put_u16(nlh, WGDEVICE_A_LISTEN_PORT, dev->listen_port);
 		if (dev->flags & WGDEVICE_HAS_FWMARK)
 			mnl_attr_put_u32(nlh, WGDEVICE_A_FWMARK, dev->fwmark);
+		if (dev->tunnel_netns)
+			mnl_attr_put_u32(nlh, WGDEVICE_A_TUNNEL_NETNS_FD, tunnel_netns_fd);
 		if (dev->flags & WGDEVICE_REPLACE_PEERS)
 			flags |= WGDEVICE_F_REPLACE_PEERS;
 		if (flags)
@@ -681,6 +694,8 @@ send:
 
 out:
 	mnlg_socket_close(nlg);
+	if (tunnel_netns_fd > -1)
+		close(tunnel_netns_fd);
 	errno = -ret;
 	return ret;
 }

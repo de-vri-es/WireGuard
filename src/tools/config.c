@@ -157,6 +157,23 @@ out:
 	return ret;
 }
 
+static inline bool parse_netns(char **netns, const char *value)
+{
+	char *dupped;
+
+	if (strchr(value, '\n'))
+		return false;
+
+	dupped = strdup(value);
+	if (!dupped)
+		return false;
+
+	free(*netns);
+	*netns = dupped;
+
+	return true;
+}
+
 static inline bool parse_ip(struct wgallowedip *allowedip, const char *value)
 {
 	allowedip->family = AF_UNSPEC;
@@ -394,6 +411,8 @@ static bool process_line(struct config_ctx *ctx, const char *line)
 			ret = parse_port(&ctx->device->listen_port, &ctx->device->flags, value);
 		else if (key_match("FwMark"))
 			ret = parse_fwmark(&ctx->device->fwmark, &ctx->device->flags, value);
+		else if (key_match("TunnelNetNS"))
+			ret = parse_netns(&ctx->device->tunnel_netns, value);
 		else if (key_match("PrivateKey")) {
 			ret = parse_key(ctx->device->private_key, value);
 			if (ret)
@@ -527,6 +546,11 @@ struct wgdevice *config_read_cmd(char *argv[], int argc)
 			argc -= 2;
 		} else if (!strcmp(argv[0], "fwmark") && argc >= 2 && !peer) {
 			if (!parse_fwmark(&device->fwmark, &device->flags, argv[1]))
+				goto error;
+			argv += 2;
+			argc -= 2;
+		} else if (!strcmp(argv[0], "tunnel-netns") && argc >= 2 && !peer) {
+			if (!parse_netns(&device->tunnel_netns, argv[1]))
 				goto error;
 			argv += 2;
 			argc -= 2;

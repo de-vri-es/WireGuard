@@ -79,6 +79,8 @@ struct wgdevice {
 	uint32_t fwmark;
 	uint16_t listen_port;
 
+	char *tunnel_netns;
+
 	struct wgpeer *first_peer, *last_peer;
 };
 
@@ -89,6 +91,7 @@ static inline void free_wgdevice(struct wgdevice *dev)
 {
 	if (!dev)
 		return;
+	free(dev->tunnel_netns);
 	for (struct wgpeer *peer = dev->first_peer, *np = peer ? peer->next_peer : NULL; peer; peer = np, np = peer ? peer->next_peer : NULL) {
 		for (struct wgallowedip *allowedip = peer->first_allowedip, *na = allowedip ? allowedip->next_allowedip : NULL; allowedip; allowedip = na, na = allowedip ? allowedip->next_allowedip : NULL)
 			free(allowedip);
