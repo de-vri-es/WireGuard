@@ -473,30 +473,10 @@ out:
 	return ret;
 }
 
-static int set_tunnel_netns(struct wg_device *wg, u32 fd)
-{
-	struct net *new_net;
-
-	if (wg->sock4 != NULL || wg->sock6 != NULL)
-		return -EINVAL;
-
-	new_net = get_net_ns_by_fd(fd);
-
-	if (IS_ERR(new_net))
-		return PTR_ERR(new_net);
-
-	if (wg->have_creating_net_ref)
-		put_net(wg->creating_net);
-
-	wg->have_creating_net_ref = true;
-	wg->creating_net = new_net;
-
-	return 0;
-}
-
 static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 {
 	struct wg_device *wg = lookup_interface(info->attrs, skb);
+	struct net *new_net = NULL;
 	int ret;
 
 	if (IS_ERR(wg)) {
@@ -509,9 +489,33 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 
 	ret = -EPERM;
 	if ((info->attrs[WGDEVICE_A_LISTEN_PORT] ||
-	     info->attrs[WGDEVICE_A_FWMARK]) &&
+	     info->attrs[WGDEVICE_A_FWMARK] ||
+	     info->attrs[WGDEVICE_A_TUNNEL_NETNS_FD]) &&
 	    !ns_capable(wg->creating_net->user_ns, CAP_NET_ADMIN))
 		goto out;
+
+	if (info->attrs[WGDEVICE_A_TUNNEL_NETNS_FD]) {
+		int fd = nla_get_u32(info->attrs[WGDEVICE_A_TUNNEL_NETNS_FD]);
+		new_net = get_net_ns_by_fd(fd);
+
+		if (IS_ERR(new_net)) {
+			ret = PTR_ERR(new_net);
+			new_net = NULL;
+			goto out;
+		}
+
+		/* Also check that we've got CAP_NET_ADMIN in the new namespace. */
+		if (!ns_capable(new_net->user_ns, CAP_NET_ADMIN)) {
+			ret = -EPERM;
+			goto out;
+		}
+
+		/* And check that there are no initialized sockets. */
+		if (wg->sock4 != NULL || wg->sock6 != NULL) {
+			ret = -EINVAL;
+			goto out;
+		}
+	}
 
 	++wg->device_update_gen;
 
@@ -582,15 +586,19 @@ static int wg_set_device(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	if (info->attrs[WGDEVICE_A_TUNNEL_NETNS_FD]) {
-		int fd = nla_get_u32(info->attrs[WGDEVICE_A_TUNNEL_NETNS_FD]);
-		ret = set_tunnel_netns(wg, fd);
-		if (ret < 0)
-			goto out;
+		if (wg->have_creating_net_ref)
+			put_net(wg->creating_net);
+
+		wg->have_creating_net_ref = true;
+		wg->creating_net = new_net;
+		new_net = NULL;
 	}
 
 	ret = 0;
 
 out:
+	if (new_net)
+		put_net(new_net);
 	mutex_unlock(&wg->device_update_lock);
 	rtnl_unlock();
 	dev_put(wg->dev);
